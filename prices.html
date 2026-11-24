@@ -258,4 +258,17 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
   }
   init();
 })();
-</script></body></html>
+</script><script>/* ORB-NAVFIX-20261124 fresh pages on every in-site tap + Back (display only) */
+(function(){
+  var loaded=Date.now();
+  function fresh(href){ try{ var u=new URL(href, location.href); if(u.origin!==location.origin) return null;
+    u.searchParams.set('r', String(Date.now())); return u.toString(); }catch(e){ return null; } }
+  document.addEventListener('click', function(ev){
+    var a=ev.target&&ev.target.closest?ev.target.closest('a[href]'):null; if(!a) return;
+    if(ev.defaultPrevented||ev.button!==0||ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey||(a.target&&a.target!=='_self')) return;
+    var h=a.getAttribute('href')||''; if(!h||h.charAt(0)==='#'||/^(mailto|tel|javascript):/i.test(h)) return;
+    var f=fresh(a.href); if(!f) return; ev.preventDefault(); location.href=f; }, true);
+  window.addEventListener('pageshow', function(e){ if(e.persisted&&Date.now()-loaded>30000){ var f=fresh(location.href); if(f) location.replace(f); } });
+})();
+</script>
+</body></html>
