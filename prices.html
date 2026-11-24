@@ -1,4 +1,4 @@
-<!doctype html><!-- ORB-BUY-LIVE-20261124 manual Buy (Hari t366u) -->
+<!doctype html><!-- ORB-BOTCMD-20261124 bot-managed Long/Short Go (Hari t382u); plain manual Buy removed -->
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow"><meta name="apple-mobile-web-app-capable" content="yes">
@@ -31,6 +31,13 @@ h1 .sub{font-size:.66rem;font-weight:700;letter-spacing:.08em;color:var(--muted)
 .buy:active{transform:scale(.95)}
 #m .note{font-size:.8rem;color:var(--muted);margin:0 0 10px}#m label.q{font-size:.82rem;color:var(--muted);display:block;margin-bottom:4px}
 .buy:disabled{opacity:.45}
+.buy.go{background:linear-gradient(135deg,#1b3a63,#13294a);color:#dbeafe;border-color:#3d6fae}
+.seg{display:flex;gap:8px;margin:4px 0 12px}.seg button{flex:1;padding:12px 0!important;font-size:1rem!important;border-radius:12px!important;background:#0b1424!important;color:#8c9ab5!important;border:1px solid var(--border)!important}
+.seg button.on.long{background:linear-gradient(135deg,#124a2d,#0f3a24)!important;color:#c8ffd9!important;border-color:#2f9b5f!important}
+.seg button.on.short{background:linear-gradient(135deg,#5a1a1a,#3f1212)!important;color:#ffd0d0!important;border-color:#b54a4a!important}
+#m .plan{font-size:.84rem;color:#c9d3e6;background:#0b1424;border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:0 0 10px;display:none}
+#m .stages{display:flex;gap:6px;margin:6px 0 2px;flex-wrap:wrap}#m .stages span{font-size:.72rem;padding:2px 8px;border-radius:999px;background:#18233a;color:#8c9ab5}
+#m .stages span.done{background:rgba(74,222,128,.15);color:#b9f5cf}#m .stages span.bad{background:rgba(248,113,113,.15);color:#fecaca}
 #unlock{display:none;flex-direction:column;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:14px;padding:14px;margin-top:10px;margin-bottom:10px}
 #unlock input,#m input{background:#08101e;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:1rem}
 #unlock button,#m button{background:#1b3a63;color:#dbeafe;border:1px solid #2f5a8f;border-radius:10px;padding:9px 14px;font-weight:700}
@@ -45,12 +52,14 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
 <form id="unlock"><div>Enter the dashboard password to load prices.</div>
 <input id="pw" type="password" autocomplete="current-password" placeholder="Dashboard password"><button type="submit">Unlock</button></form>
 <div id="list"></div>
-<footer>Alpaca IEX feed (open/high/low are from IEX trades, so they can differ slightly from consolidated quotes). Auto-refreshes every 15 s; Refresh asks the box for a fresh quote now. Buy = your own manual market buy (action PIN, cash only); the bots pause new trades while you hold it and everything is closed at 12:55 PT.</footer>
-<div id="m"><form class="box" id="m-form"><h3 id="m-title">Buy</h3><p id="m-text"></p>
-<label class="q" for="m-qty">Shares</label><input id="m-qty" type="number" inputmode="numeric" min="1" step="1" autocomplete="off" placeholder="Shares (tick Dry run to see suggested / max)">
-<label style="font-size:.85rem;display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="m-dry" type="checkbox" style="width:auto;margin:0"> Dry run (check only, no order)</label>
+<footer>Alpaca IEX feed (open/high/low are from IEX trades, so they can differ slightly from consolidated quotes). Auto-refreshes every 15 s; Refresh asks the box for a fresh quote now. Trade = you pick Long or Short and the PC bot opens it as its OWN trade: bot sizing, cash only (never margin), one position at a time, and the bot's stop + profit lock/trail (stocks: −$10 max loss, $10 lock + $1 trail; QQQ: −$50 stop, +$100 lock then peak − $25). Closed at 12:55 PT (3:55 PM ET) with everything else.</footer>
+<div id="m"><form class="box" id="m-form"><h3 id="m-title">Trade</h3><p id="m-text"></p>
+<div class="seg" role="group" aria-label="Direction"><button type="button" class="long" id="m-long">▲ Long</button><button type="button" class="short" id="m-short">▼ Short</button></div>
+<div class="plan" id="m-plan"></div>
+<label style="font-size:.85rem;display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="m-dry" type="checkbox" style="width:auto;margin:0"> Dry run (check only, nothing is sent to the bot)</label>
 <input id="m-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Action PIN">
-<div class="res" id="m-res"></div><div class="btns"><button type="button" id="m-cancel">Cancel</button><button type="submit" id="m-go">Buy</button></div></form></div>
+<div class="stages" id="m-stages" style="display:none"><span id="s-q">Queued</span><span id="s-p">Placed</span><span id="s-f">Filled</span></div>
+<div class="res" id="m-res"></div><div class="btns"><button type="button" id="m-cancel">Cancel</button><button type="submit" id="m-go">Go</button></div></form></div>
 <script>
 (function () {
   var REPO = "hpokkuluri/orb-v3-live";
@@ -96,7 +105,7 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
       html += '<div class="row' + (s === "QQQ" ? " qqq" : "") + '"><div class="sym">' + esc(s) + '</div><div class="px ' + cls(r.chg_prev) + '">' + money(r.price) + '</div>'
         + '<div class="chips"><span class="chip ' + cls(r.chg_open) + '">vs open ' + sgn(r.chg_open, 2) + ' (' + sgn(r.chg_open_pct, 2) + '%)</span>'
         + '<span class="chip ' + cls(r.chg_prev) + '">vs prev ' + sgn(r.chg_prev, 2) + ' (' + sgn(r.chg_prev_pct, 2) + '%)</span></div>'
-        + '<button class="buy" type="button" data-sym="' + esc(s) + '">Buy</button>'
+        + '<button class="buy go" type="button" data-sym="' + esc(s) + '">Trade</button>'
         + '<div class="ohl">O ' + money(r.open) + ' · H ' + money(r.high) + ' · L ' + money(r.low) + ' · Prev ' + money(r.prev_close) + '</div></div>';
     });
     $("list").innerHTML = html;
@@ -189,50 +198,70 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
   }
   function mres(t, ok, fin) { var r = $("m-res"); r.textContent = t; r.className = "res" + (ok === true ? " ok" : ok === false ? " bad" : "");
     if (fin) { $("m-go").style.display = "none"; $("m-cancel").textContent = "Done"; $("m-cancel").disabled = false; } }
+  function setSide(sd) { if (!pending) return; pending.side = sd;
+    $("m-long").className = "long" + (sd === "long" ? " on" : ""); $("m-short").className = "short" + (sd === "short" ? " on" : "");
+    $("m-go").textContent = sd ? (sd === "long" ? "Go LONG " : "Go SHORT ") + pending.symbol : "Go"; }
+  function stage(st) { $("m-stages").style.display = "flex";
+    var order = ["queued", "submitted", "filled"], ids = ["s-q", "s-p", "s-f"], i = order.indexOf(st);
+    ids.forEach(function (id, k) { $(id).className = (i >= k ? "done" : ""); });
+    if (st === "refused" || st === "expired") { ids.forEach(function (id) { $(id).className = ""; }); $("s-q").className = "bad"; $("s-q").textContent = st === "expired" ? "Expired" : "Refused"; } }
+  function showPlan(p) { var el = $("m-plan"); if (!p || !p.qty) { el.style.display = "none"; return; }
+    el.innerHTML = "<b>" + esc((p.side || "").toUpperCase() + " " + p.symbol) + "</b> · ~" + esc(p.qty) + " sh @ ~" + money(p.est_price)
+      + " (~$" + Math.round(p.notional).toLocaleString() + ")<br>Stop " + money(p.stop) + " (max loss ~$" + Math.round(p.max_loss_est) + ")"
+      + (p.target ? " · Target " + money(p.target) : "") + "<br><span style='color:#8c9ab5'>" + esc(p.rules || "") + "</span>";
+    el.style.display = "block"; }
   function openBuy(sym) {
     var r = snap && (snap.rows || []).filter(function (x) { return x.symbol === sym; })[0];
-    pending = { symbol: sym };
-    $("m-title").textContent = "Buy " + sym + " (long)";
-    $("m-text").textContent = (r ? "Last " + money(r.price) + ". " : "") + (sym === "QQQ"
-      ? "" : "") + "Manual market buy, cash only (never margin). It is YOUR position: no stop is placed, the bots will not manage it "
-      + "and will not open new trades while you hold it. Everything is closed at 12:55 PT (3:55 PM ET). Refused if any position or order is already open. "
-      + "Tick Dry run first to see the suggested and maximum shares - nothing is sent.";
-    $("m-qty").value = "";
-    $("m-pin").value = ""; $("m-pin").disabled = false; $("m-qty").disabled = false; $("m-dry").checked = false; $("m-res").textContent = "";
+    pending = { symbol: sym, side: null };
+    $("m-title").textContent = "Trade " + sym + (r ? " · " + money(r.price) : "");
+    $("m-text").textContent = "Pick a direction. The PC bot opens it as its OWN trade with its own size and protection: "
+      + (sym === "QQQ" ? "QQQ bot rules - 98% of cash, −$50 stop, at +$100 the stop locks +$100 then trails $25 below the peak."
+                       : "14-stock rules - 1.5% risk / max 16% of equity, stop = closer of the OR midpoint and −$10, $10 lock + $1 trail, 2.5R target.")
+      + " Cash only, one position at a time, refused if anything is open. Closed at 12:55 PT. Tick Dry run to see the size and stop first.";
+    $("m-pin").value = ""; $("m-pin").disabled = false; $("m-dry").checked = false; $("m-res").textContent = ""; $("m-plan").style.display = "none";
+    $("m-stages").style.display = "none"; $("s-q").textContent = "Queued";
+    $("m-long").disabled = false; $("m-short").disabled = false; setSide(null);
     $("m-go").style.display = ""; $("m-go").disabled = false; $("m-cancel").textContent = "Cancel"; $("m-cancel").disabled = false;
-    $("m").style.display = "flex"; setTimeout(function () { try { $("m-pin").focus(); } catch (e) {} }, 50);
+    $("m").style.display = "flex";
   }
   function closeBuy() { $("m").style.display = "none"; $("m-pin").value = ""; pending = null; }
   async function submitBuy(ev) {
     ev.preventDefault(); if (!pending) return;
-    var pin = $("m-pin").value, dry = $("m-dry").checked, qty = String($("m-qty").value || "").trim();
-    if (qty && !/^[1-9][0-9]{0,5}$/.test(qty)) { mres("Shares must be a whole number.", false); return; }
-    if (!dry && !qty) { mres("Enter the number of shares (tick Dry run to see the suggested / max size).", false); return; }
+    if (!pending.side) { mres("Choose Long or Short.", false); return; }
+    var pin = $("m-pin").value, dry = $("m-dry").checked, side = pending.side, sym = pending.symbol;
     if (!pin) { mres("Enter the action PIN.", false); return; }
-    $("m-go").disabled = true; $("m-pin").disabled = true; $("m-qty").disabled = true; $("m-cancel").disabled = true; mres("Checking the box…");
+    $("m-go").disabled = true; $("m-pin").disabled = true; $("m-long").disabled = true; $("m-short").disabled = true; $("m-cancel").disabled = true; mres("Checking the box…");
     var b = await loadBox();
-    if (!b || !b.action_pubkey || !b.actions_enabled) { mres("Buy is not available right now (box status not live). Nothing was sent.", false, true); return; }
-    if (!dry && b.buy_live === false) { mres("Live Buy is switched off on the box. Nothing was sent.", false, true); return; }
+    if (!b || !b.action_pubkey || !b.actions_enabled) { mres("Trading from the page is not available right now (box status not live). Nothing was sent.", false, true); return; }
+    if (!dry && b.botcmd_live === false) { mres("Go is switched off on the box right now. Nothing was sent. (Dry run still works.)", false, true); return; }
     var reqid = bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts = Date.now(), since = Math.floor(ts / 1000) - 10;
     try {
       var pub = await crypto.subtle.importKey("spki", b64ToBytes(b.action_pubkey), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
-      var pinCt = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pub, utf8(JSON.stringify({ pin: pin, reqid: reqid, ts: ts, action: "buy", symbol: pending.symbol, qty: qty })));
+      var pinCt = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pub, utf8(JSON.stringify({ pin: pin, reqid: reqid, ts: ts, action: "botcmd", symbol: sym, side: side })));
       pin = null; $("m-pin").value = "";
-      var cmd = { t: "cmd", v: 1, reqid: reqid, ts: ts, action: "buy", symbol: pending.symbol, qty: qty, dry_run: dry, pin_ct: bytesToB64(pinCt) };
+      var cmd = { t: "cmd", v: 1, reqid: reqid, ts: ts, action: "botcmd", symbol: sym, side: side, dry_run: dry, pin_ct: bytesToB64(pinCt) };
       var r = await get(RELAY + "/" + b.cmd_topic, { method: "POST", body: JSON.stringify(await enc(cmd)), headers: { "Content-Type": "text/plain" } });
       if (!r.ok) throw new Error("relay HTTP " + r.status);
-    } catch (e) { mres("Could not send (" + (e && e.message || "error") + "). Nothing was bought.", false, true); return; }
-    mres("Sent. Waiting for the box…");
-    var t0 = Date.now();
-    while (Date.now() - t0 < 75000) {
-      await new Promise(function (res) { setTimeout(res, 2000); });
+    } catch (e) { mres("Could not send (" + (e && e.message || "error") + "). Nothing was sent.", false, true); return; }
+    mres(dry ? "Dry run sent. Waiting for the box…" : "Sent. Waiting for the box…");
+    var t0 = Date.now(), seen = {}, last = null, limit = dry ? 75000 : 420000;
+    $("m-cancel").disabled = false; $("m-cancel").textContent = "Close";
+    while (Date.now() - t0 < limit && $("m").style.display !== "none") {
+      await new Promise(function (res) { setTimeout(res, 2500); });
       try { var p = await get(RELAY + "/" + b.reply_topic + "/json?poll=1&since=" + since);
         if (p.ok) { var lines = (await p.text()).split("\n");
           for (var i = 0; i < lines.length; i++) { if (!lines[i].trim()) continue; var ev2; try { ev2 = JSON.parse(lines[i]); } catch (x) { continue; }
-            if (ev2.event !== "message" || !ev2.message) continue;
-            try { var rep = await dec(JSON.parse(ev2.message)); if (rep && rep.reqid === reqid) { mres(rep.message || (rep.ok ? "Done." : "Refused."), !!rep.ok, true); return; } } catch (x2) {} } } } catch (e3) {}
+            if (ev2.event !== "message" || !ev2.message || seen[ev2.id]) continue; seen[ev2.id] = 1;
+            try { var rep = await dec(JSON.parse(ev2.message)); if (!rep || rep.reqid !== reqid) continue;
+              last = rep; if (rep.plan) showPlan(rep.plan);
+              if (rep.stage && rep.stage !== "dry_run") stage(rep.stage);
+              var fin = !!rep.final || rep.stage === "dry_run" || rep.stage === "refused" || rep.stage === "filled" || rep.stage === "expired";
+              mres(rep.message || (rep.ok ? "Done." : "Refused."), rep.stage === "queued" || rep.stage === "submitted" ? null : !!rep.ok, fin);
+              if (fin) return;
+            } catch (x2) {} } } } catch (e3) {}
     }
-    mres("No reply yet. Check the dashboard / Alpaca before trying again.", null, true);
+    if ($("m").style.display === "none") return;
+    mres(last ? (last.message + " — still waiting; check the dashboard for the position.") : "No reply yet. Check the dashboard before trying again.", null, true);
   }
 
   /* ---- unlock + init */
@@ -254,6 +283,8 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
     $("unlock").addEventListener("submit", onUnlock);
     $("m-form").addEventListener("submit", submitBuy);
     $("m-cancel").addEventListener("click", closeBuy);
+    $("m-long").addEventListener("click", function () { setSide("long"); });
+    $("m-short").addEventListener("click", function () { setSide("short"); });
     $("list").addEventListener("click", function (e) { var b = e.target.closest && e.target.closest(".buy"); if (b) openBuy(b.getAttribute("data-sym")); });
     render({ rows: [] });
     getSalt();
