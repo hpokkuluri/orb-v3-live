@@ -90,9 +90,21 @@ footer{font-size:.75rem;color:#7d8aa5;margin-top:14px}
     });
     $("list").innerHTML = html;
   }
-  function showAsof(d, how) {
-    var lag = Math.max(0, Math.round((Date.now() - d.asof_epoch_ms) / 1000));
-    bar("Last updated " + fmtET(d.asof_epoch_ms) + " (" + lag + "s ago" + (how ? ", " + how : "") + ") · auto every 30s", lag > 300 ? "bad" : "ok");
+  var note = "", noteBad = false;
+  function showAsof() {
+    if (!snap) return;
+    var lag = Math.max(0, Math.round((Date.now() - snap.asof_epoch_ms) / 1000));
+    bar("Last updated " + fmtET(snap.asof_epoch_ms) + " (" + lag + "s ago)" + (lag > 75 ? " · STALE — box feed delayed" : " · auto every 30s") + (note ? " · " + note : ""),
+      (lag > 75 || noteBad) ? "bad" : "ok");
+  }
+  function expand(d) {
+    if (!d || !d.c) return d;
+    function pct(a, b) { return a != null && b ? (a - b) / b * 100 : null; }
+    d.rows = d.c.map(function (x) { var p = x[1], o = x[2], pc = x[5];
+      return { symbol: x[0], price: p, open: o, high: x[3], low: x[4], prev_close: pc,
+        chg_open: p != null && o != null ? p - o : null, chg_open_pct: pct(p, o),
+        chg_prev: p != null && pc != null ? p - pc : null, chg_prev_pct: pct(p, pc) }; });
+    return d;
   }
   async function loadFile() {
     var now = Date.now(), b = Math.floor((now / 1000 - 6) / 30) * 30, tries = [];
@@ -105,36 +117,44 @@ footer{font-size:.75rem;color:#7d8aa5;margin-top:14px}
     var l = await get(PX_BASE + "latest.json?t=" + now); if (l.ok) return await dec(await l.json());
     return null;
   }
-  function take(d, how) { if (d && (!snap || d.asof_epoch_ms >= snap.asof_epoch_ms)) { snap = d; render(d); } if (snap) showAsof(snap, how); }
+  function take(d) { d = expand(d); if (d && d.rows && (!snap || d.asof_epoch_ms >= snap.asof_epoch_ms)) { var t = snap && snap.req_topic; snap = d; if (!snap.req_topic && t) { snap.req_topic = t; snap.rep_topic = topics.rep; } if (d.req_topic) { topics = { req: d.req_topic, rep: d.rep_topic }; } render(d); } showAsof(); }
+  var topics = {};
   async function auto() {
     if (inFlight || !keyHex) return; inFlight = true;
-    try { var d = await loadFile(); if (d) take(d); else bar("No price file yet — try Refresh.", "bad"); }
-    catch (e) { if (e && e.name === "OperationError") { keyHex = null; lock("Could not decrypt — re-enter the dashboard password."); } else bar("Network error — retrying in 30s.", "bad"); }
+    try { var d = await loadFile(); if (d) { if (!manualBusy) { note = ""; noteBad = false; } take(d); } else { note = "no price file found"; noteBad = true; showAsof(); } }
+    catch (e) { if (e && e.name === "OperationError") { keyHex = null; lock("Could not decrypt — re-enter the dashboard password."); } else { note = "network error, retrying"; noteBad = true; showAsof(); } }
     finally { inFlight = false; }
   }
+  var manualBusy = false;
   async function manual() {
-    if (!keyHex) return; var btn = $("refresh"); btn.disabled = true; bar("Refreshing…");
+    if (!keyHex || manualBusy) return; manualBusy = true;
+    var btn = $("refresh"), before = snap ? snap.asof_epoch_ms : 0, done = false;
+    btn.disabled = true; btn.textContent = "Refreshing…"; note = "asking the box for a fresh quote…"; noteBad = false; showAsof();
+    auto();                                            /* fallback: newest published snapshot right away */
     try {
-      if (!snap) { var d0 = await loadFile(); if (d0) take(d0); }
-      if (!snap || !snap.req_topic) { await auto(); return; }
-      var reqid = bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts = Date.now(), since = Math.floor(ts / 1000) - 5;
-      var r = await get(RELAY + "/" + snap.req_topic, { method: "POST", body: JSON.stringify(await enc({ t: "preq", v: 1, reqid: reqid, ts: ts })), headers: { "Content-Type": "text/plain" } });
-      if (!r.ok) throw new Error("relay " + r.status);
-      var t0 = Date.now();
-      while (Date.now() - t0 < 12000) {
-        await new Promise(function (res) { setTimeout(res, 900); });
-        try {
-          var p = await get(RELAY + "/" + snap.rep_topic + "/json?poll=1&since=" + since);
-          if (p.ok) { var lines = (await p.text()).split("\n");
-            for (var i = 0; i < lines.length; i++) { if (!lines[i].trim()) continue; var ev; try { ev = JSON.parse(lines[i]); } catch (e) { continue; }
-              if (ev.event !== "message" || !ev.message) continue;
-              try { var d = await dec(JSON.parse(ev.message)); if (d && d.reqid === reqid) { take(d, "fresh"); restartTimer(); return; } } catch (e2) {} } }
-        } catch (e3) {}
-        if (Date.now() - t0 > 4000) { try { var f = await get(PX_BASE + "r-" + reqid + ".json?t=" + Date.now()); if (f.ok) { take(await dec(await f.json()), "fresh"); restartTimer(); return; } } catch (e4) {} }
+      if (!topics.req) { var d0 = await loadFile(); if (d0) take(d0); }
+      if (topics.req) {
+        var reqid = bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts = Date.now(), since = Math.floor(ts / 1000) - 5;
+        var r = await get(RELAY + "/" + topics.req, { method: "POST", body: JSON.stringify(await enc({ t: "preq", v: 1, reqid: reqid, ts: ts })), headers: { "Content-Type": "text/plain" } });
+        if (!r.ok) throw new Error("relay " + r.status);
+        var t0 = Date.now();
+        while (!done && Date.now() - t0 < 10000) {
+          await new Promise(function (res) { setTimeout(res, 700); });
+          try {
+            var p = await get(RELAY + "/" + topics.rep + "/json?poll=1&since=" + since);
+            if (p.ok) { var lines = (await p.text()).split("\n");
+              for (var i = 0; i < lines.length && !done; i++) { if (!lines[i].trim()) continue; var ev; try { ev = JSON.parse(lines[i]); } catch (e) { continue; }
+                if (ev.event !== "message" || !ev.message) continue;
+                try { var d = await dec(JSON.parse(ev.message)); if (d && d.reqid === reqid) { take(d); done = true; } } catch (e2) {} } }
+          } catch (e3) {}
+          if (!done && Date.now() - t0 > 4000) { try { var f = await get(PX_BASE + "r-" + reqid + ".json?t=" + Date.now()); if (f.ok) { take(await dec(await f.json())); done = true; } } catch (e4) {} }
+        }
       }
-      await auto(); bar($("bar").textContent + " · box did not answer the refresh", "bad");
-    } catch (e) { await auto(); }
-    finally { btn.disabled = false; }
+    } catch (e) {}
+    if (done) { note = "fresh quote ✓"; noteBad = false; btn.textContent = "Updated ✓"; restartTimer(); }
+    else { note = "Refresh: box did not answer in 10s — showing newest published prices"; noteBad = true; btn.textContent = "Refresh failed"; }
+    showAsof();
+    setTimeout(function () { btn.textContent = "Refresh"; btn.disabled = false; manualBusy = false; if (done) { note = ""; showAsof(); } }, 2000);
   }
   /* auto refresh every 30 s, timed 8 s after each box publish (:00/:30 ET seconds) so the data is ~8 s old */
   function restartTimer() {
@@ -225,6 +245,7 @@ footer{font-size:.75rem;color:#7d8aa5;margin-top:14px}
     if (!keyHex) { lock("Enter the dashboard password to load prices."); }
     else await auto();
     restartTimer();
+    setInterval(showAsof, 1000);                     /* the "Ns ago" age ticks live so staleness is visible */
     document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") auto(); });
   }
   init();
