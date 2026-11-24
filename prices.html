@@ -43,7 +43,7 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
 <form id="unlock"><div>Enter the dashboard password to load prices.</div>
 <input id="pw" type="password" autocomplete="current-password" placeholder="Dashboard password"><button type="submit">Unlock</button></form>
 <div id="list"></div>
-<footer>Alpaca IEX feed (open/high/low are from IEX trades, so they can differ slightly from consolidated quotes). Auto-refreshes every 30 s; Refresh asks the box for a fresh quote now.</footer>
+<footer>Alpaca IEX feed (open/high/low are from IEX trades, so they can differ slightly from consolidated quotes). Auto-refreshes every 15 s; Refresh asks the box for a fresh quote now.</footer>
 <div id="m"><form class="box" id="m-form"><h3 id="m-title">Buy</h3><p id="m-text"></p>
 <label style="font-size:.85rem;display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="m-dry" type="checkbox" style="width:auto;margin:0"> Dry run (check only, no order)</label>
 <input id="m-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Action PIN">
@@ -54,7 +54,7 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
   var PX_BASE = "https://raw.githubusercontent.com/" + REPO + "/grok-live-prices/p/";
   var BOX_BASE = "https://raw.githubusercontent.com/" + REPO + "/grok-live-status/s/";
   var LIVE_LATEST = "https://raw.githubusercontent.com/" + REPO + "/grok-live-data/live/latest.json";
-  var RELAY = "https://ntfy.sh", POLL_MS = 30000, PT = "America/Los_Angeles", ET = "America/New_York";
+  var RELAY = "https://ntfy.sh", POLL_MS = 15000, PT = "America/Los_Angeles", ET = "America/New_York";
   var ORDER = ["NVDA","TSLA","INTC","PLTR","AMD","AAPL","AMZN","GOOGL","MU","MSFT","META","AVGO","WMT","CSCO","QQQ"];
   var keyHex = null, salt = "", snap = null, box = null, boxAt = 0, inFlight = false, timer = null, pending = null;
   function $(id) { return document.getElementById(id); }
@@ -102,7 +102,7 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
   function showAsof() {
     if (!snap) return;
     var lag = Math.max(0, Math.round((Date.now() - snap.asof_epoch_ms) / 1000));
-    bar("Last updated " + fmtET(snap.asof_epoch_ms) + " (" + lag + "s ago)" + (lag > 75 ? " · STALE — box feed delayed" : " · auto every 30s") + (note ? " · " + note : ""),
+    bar("Last updated " + fmtET(snap.asof_epoch_ms) + " (" + lag + "s ago)" + (lag > 45 ? " · STALE — box feed delayed" : " · auto every 15s") + (note ? " · " + note : ""),
       (lag > 75 || noteBad) ? "bad" : "ok");
   }
   function expand(d) {
@@ -115,8 +115,8 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
     return d;
   }
   async function loadFile() {
-    var now = Date.now(), b = Math.floor((now / 1000 - 6) / 30) * 30, tries = [];
-    for (var i = 0; i < 4; i++) tries.push(b - 30 * i);
+    var now = Date.now(), b = Math.floor((now / 1000 - 5) / 15) * 15, tries = [];
+    for (var i = 0; i < 6; i++) tries.push(b - 15 * i);
     var b5 = Math.floor(now / 300000) * 300; for (var j = 0; j < 3; j++) tries.push(b5 - 300 * j);
     for (var k = 0; k < tries.length; k++) {
       try { var r = await get(PX_BASE + tries[k] + ".json?t=" + now); if (r.ok) return await dec(await r.json()); }
@@ -164,22 +164,22 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
     showAsof();
     setTimeout(function () { btn.textContent = "Refresh"; btn.disabled = false; manualBusy = false; if (done) { note = ""; showAsof(); } }, 2000);
   }
-  /* auto refresh every 30 s, timed 8 s after each box publish (:00/:30 ET seconds) so the data is ~8 s old */
+  /* auto refresh every 15 s, timed 5 s after each box publish (:00/:15/:30/:45 ET seconds) so the data is ~5 s old */
   function restartTimer() {
     if (timer) clearTimeout(timer);
-    var ms = 30000 - ((Date.now() - 8000) % 30000); if (ms < 3000) ms += 30000;
+    var ms = 15000 - ((Date.now() - 5000) % 15000); if (ms < 2000) ms += 15000;
     timer = setTimeout(function () { auto(); restartTimer(); }, ms);
   }
 
   /* ---- box status (for Buy: RSA key + relay topics) */
   function ptParts(ms) { var m = {}; new Intl.DateTimeFormat("en-US", { timeZone: PT, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
       .formatToParts(new Date(ms)).forEach(function (p) { m[p.type] = p.value; }); if (m.hour === "24") m.hour = "00"; return m; }
-  function boxName(ms) { var p = ptParts(Math.floor(ms / 30000) * 30000); return p.year + p.month + p.day + "-" + p.hour + p.minute + p.second; }
+  function boxName(ms) { var p = ptParts(Math.floor(ms / 15000) * 15000); return p.year + p.month + p.day + "-" + p.hour + p.minute + p.second; }
   async function loadBox() {
     if (box && Date.now() - boxAt < 60000) return box;
     var now = Date.now();
     for (var i = 0; i < 4; i++) {
-      try { var r = await get(BOX_BASE + boxName(now - 12000 - i * 30000) + ".json"); if (!r.ok) continue;
+      try { var r = await get(BOX_BASE + boxName(now - 8000 - i * 15000) + ".json"); if (!r.ok) continue;
         var d = await dec(await r.json()); if (d && now - d.asof_epoch_ms < 180000) { box = d; boxAt = now; return d; } } catch (e) {}
     }
     return null;
@@ -268,7 +268,7 @@ footer{font-size:.72rem;color:#6f7d98;margin-top:16px;line-height:1.5}
     if(ev.defaultPrevented||ev.button!==0||ev.metaKey||ev.ctrlKey||ev.shiftKey||ev.altKey||(a.target&&a.target!=='_self')) return;
     var h=a.getAttribute('href')||''; if(!h||h.charAt(0)==='#'||/^(mailto|tel|javascript):/i.test(h)) return;
     var f=fresh(a.href); if(!f) return; ev.preventDefault(); location.href=f; }, true);
-  window.addEventListener('pageshow', function(e){ if(e.persisted&&Date.now()-loaded>30000){ var f=fresh(location.href); if(f) location.replace(f); } });
+  window.addEventListener('pageshow', function(e){ if(e.persisted&&Date.now()-loaded>15000){ var f=fresh(location.href); if(f) location.replace(f); } });
 })();
 </script>
 </body></html>
