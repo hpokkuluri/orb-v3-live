@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow"><meta name="apple-mobile-web-app-capable" content="yes">
+<title>ORB Prices</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0b1220;color:#e8eefc;font:15px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:12px 10px calc(24px + env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+h1{font-size:1.15rem;margin:0}
+a.back{color:#8fb4ff;font-size:.85rem;text-decoration:none}
+#refresh{background:#1d3a66;color:#e8eefc;border:1px solid #3a5a80;border-radius:10px;padding:9px 16px;font-weight:700;font-size:.95rem}
+#refresh:disabled{opacity:.6}
+#bar{font-size:.82rem;color:#9fb0cc;margin:4px 0 10px}#bar.bad{color:#ff8a8a}#bar.ok{color:#9fdc9f}
+.row{display:grid;grid-template-columns:1fr auto;gap:2px 10px;background:#121c30;border:1px solid #1f2f4a;border-radius:12px;padding:9px 11px;margin:7px 0}
+.row.qqq{border-color:#3a5a80;margin-top:14px}
+.sym{font-weight:800;font-size:1.02rem}.px{font-weight:800;font-size:1.05rem;text-align:right}
+.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{font-size:.8rem;padding:2px 7px;border-radius:7px;background:#1a263d;white-space:nowrap}
+.up{color:#3ddc84}.dn{color:#ff6b6b}.flat{color:#c9d3e6}.chip.up{background:#0f3324}.chip.dn{background:#3a1418}
+.ohl{grid-column:1/2;font-size:.8rem;color:#9fb0cc}
+.buy{display:none!important;grid-column:2/3;grid-row:2/4;align-self:center;background:#0f3a24;color:#c8ffd9;border:1px solid #2f9b5f;border-radius:9px;padding:7px 12px;font-weight:700}
+.buy:disabled{opacity:.45}
+#unlock{display:none;flex-direction:column;gap:8px;background:#152238;border:1px solid #3a5a80;border-radius:12px;padding:14px;margin:10px 0}
+#unlock input,#m input{background:#0b1220;color:#e8eefc;border:1px solid #3a5a80;border-radius:8px;padding:10px;font-size:1rem}
+#unlock button,#m button{background:#1d3a66;color:#e8eefc;border:1px solid #3a5a80;border-radius:8px;padding:9px 14px;font-weight:700}
+#m{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:99}
+#m .box{background:#152238;border:1px solid #3a5a80;border-radius:14px;padding:16px 18px;max-width:420px;width:92%}
+#m h3{margin:0 0 8px;color:#c8ffd9}#m p{font-size:.9rem;margin:6px 0 10px}#m input{width:100%;box-sizing:border-box;margin-bottom:10px}
+#m .btns{display:flex;gap:10px;justify-content:flex-end}#m #m-go{background:#0f3a24;border-color:#2f9b5f;color:#c8ffd9}
+#m .res{font-size:.9rem;margin:8px 0}#m .res.ok{color:#9fdc9f}#m .res.bad{color:#ff8a8a}
+footer{font-size:.75rem;color:#7d8aa5;margin-top:14px}
+</style></head><body>
+<header><div><h1>ORB Prices</h1><a class="back" href="./">‹ Dashboard</a></div><button id="refresh" type="button">Refresh</button></header>
+<div id="bar">Starting…</div>
+<form id="unlock"><div>Enter the dashboard password to load prices.</div>
+<input id="pw" type="password" autocomplete="current-password" placeholder="Dashboard password"><button type="submit">Unlock</button></form>
+<div id="list"></div>
+<footer>Alpaca IEX feed (open/high/low are from IEX trades, so they can differ slightly from consolidated quotes). Auto-refreshes every 30 s; Refresh asks the box for a fresh quote now.</footer>
+<div id="m"><form class="box" id="m-form"><h3 id="m-title">Buy</h3><p id="m-text"></p>
+<label style="font-size:.85rem;display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="m-dry" type="checkbox" style="width:auto;margin:0"> Dry run (check only, no order)</label>
+<input id="m-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Action PIN">
+<div class="res" id="m-res"></div><div class="btns"><button type="button" id="m-cancel">Cancel</button><button type="submit" id="m-go">Buy</button></div></form></div>
+<script>
+(function () {
+  var REPO = "hpokkuluri/orb-v3-live";
+  var PX_BASE = "https://raw.githubusercontent.com/" + REPO + "/grok-live-prices/p/";
+  var BOX_BASE = "https://raw.githubusercontent.com/" + REPO + "/grok-live-status/s/";
+  var LIVE_LATEST = "https://raw.githubusercontent.com/" + REPO + "/grok-live-data/live/latest.json";
+  var RELAY = "https://ntfy.sh", POLL_MS = 30000, PT = "America/Los_Angeles", ET = "America/New_York";
+  var ORDER = ["NVDA","TSLA","INTC","PLTR","AMD","AAPL","AMZN","GOOGL","MU","MSFT","META","AVGO","WMT","CSCO","QQQ"];
+  var keyHex = null, salt = "", snap = null, box = null, boxAt = 0, inFlight = false, timer = null, pending = null;
+  function $(id) { return document.getElementById(id); }
+  function utf8(s) { return new TextEncoder().encode(s); }
+  function hexToBytes(h) { var o = new Uint8Array(h.length / 2); for (var i = 0; i < o.length; i++) o[i] = parseInt(h.substr(i * 2, 2), 16); return o; }
+  function bytesToHex(b) { return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); }
+  function b64ToBytes(s) { var bin = atob(s), o = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) o[i] = bin.charCodeAt(i); return o; }
+  function bytesToB64(b) { var s = "", u = new Uint8Array(b); for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); }
+  async function pbkdf2(p, s, it, h) { var k = await crypto.subtle.importKey("raw", utf8(p), "PBKDF2", false, ["deriveBits"]);
+    return bytesToHex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: h, iterations: it, salt: utf8(s) }, k, 256)); }
+  async function hashPassword(pw, s) { var a = await pbkdf2(pw, s, 1000, "SHA-1"); var b = await pbkdf2(a, s, 14000, "SHA-256"); return pbkdf2(b, s, 585000, "SHA-256"); }
+  async function dec(env) { if (!env || env.v !== 1 || env.alg !== "AES-GCM") throw new Error("bad envelope");
+    var k = await crypto.subtle.importKey("raw", hexToBytes(keyHex), "AES-GCM", false, ["decrypt"]);
+    return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: hexToBytes(env.iv) }, k, hexToBytes(env.ct)))); }
+  async function enc(obj) { var k = await crypto.subtle.importKey("raw", hexToBytes(keyHex), "AES-GCM", false, ["encrypt"]);
+    var iv = crypto.getRandomValues(new Uint8Array(12)); var ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, k, utf8(JSON.stringify(obj)));
+    return { v: 1, alg: "AES-GCM", kdf: "staticrypt-3", salt: salt, iv: bytesToHex(iv), ct: bytesToHex(ct), pub: {} }; }
+  function storedKey() {
+    try { var a = sessionStorage.getItem("orb_live_k"); if (a && /^[0-9a-f]{64}$/i.test(a)) return a; } catch (e) {}
+    try { var b = localStorage.getItem("staticrypt_passphrase"); if (b && /^[0-9a-f]{64}$/i.test(b)) return b; } catch (e) {}
+    return null; }
+  async function get(url, opts) { var c = new AbortController(), t = setTimeout(function () { c.abort(); }, 8000);
+    try { return await fetch(url, Object.assign({ cache: "no-store", signal: c.signal, mode: "cors" }, opts || {})); } finally { clearTimeout(t); } }
+  function bar(t, cls) { var b = $("bar"); b.textContent = t; b.className = cls || ""; }
+  function fmtET(ms) { return new Date(ms).toLocaleTimeString("en-US", { timeZone: ET, hour: "numeric", minute: "2-digit", second: "2-digit" }) + " ET"; }
+  function money(v) { return v == null ? "—" : "$" + Number(v).toFixed(2); }
+  function cls(v) { return v == null || Math.abs(v) < 1e-9 ? "flat" : v > 0 ? "up" : "dn"; }
+  function sgn(v, d) { return v == null ? "—" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  function render(d) {
+    var by = {}; (d.rows || []).forEach(function (r) { by[r.symbol] = r; });
+    var html = "";
+    ORDER.forEach(function (s) {
+      var r = by[s] || { symbol: s };
+      html += '<div class="row' + (s === "QQQ" ? " qqq" : "") + '"><div class="sym">' + esc(s) + '</div><div class="px ' + cls(r.chg_prev) + '">' + money(r.price) + '</div>'
+        + '<div class="chips"><span class="chip ' + cls(r.chg_open) + '">vs open ' + sgn(r.chg_open, 2) + ' (' + sgn(r.chg_open_pct, 2) + '%)</span>'
+        + '<span class="chip ' + cls(r.chg_prev) + '">vs prev ' + sgn(r.chg_prev, 2) + ' (' + sgn(r.chg_prev_pct, 2) + '%)</span></div>'
+        + '<button class="buy" type="button" data-sym="' + esc(s) + '">Buy</button>'
+        + '<div class="ohl">O ' + money(r.open) + ' · H ' + money(r.high) + ' · L ' + money(r.low) + ' · Prev ' + money(r.prev_close) + '</div></div>';
+    });
+    $("list").innerHTML = html;
+  }
+  function showAsof(d, how) {
+    var lag = Math.max(0, Math.round((Date.now() - d.asof_epoch_ms) / 1000));
+    bar("Last updated " + fmtET(d.asof_epoch_ms) + " (" + lag + "s ago" + (how ? ", " + how : "") + ") · auto every 30s", lag > 300 ? "bad" : "ok");
+  }
+  async function loadFile() {
+    var now = Date.now(), b = Math.floor((now / 1000 - 6) / 30) * 30, tries = [];
+    for (var i = 0; i < 4; i++) tries.push(b - 30 * i);
+    var b5 = Math.floor(now / 300000) * 300; for (var j = 0; j < 3; j++) tries.push(b5 - 300 * j);
+    for (var k = 0; k < tries.length; k++) {
+      try { var r = await get(PX_BASE + tries[k] + ".json?t=" + now); if (r.ok) return await dec(await r.json()); }
+      catch (e) { if (e && e.name === "OperationError") throw e; }
+    }
+    var l = await get(PX_BASE + "latest.json?t=" + now); if (l.ok) return await dec(await l.json());
+    return null;
+  }
+  function take(d, how) { if (d && (!snap || d.asof_epoch_ms >= snap.asof_epoch_ms)) { snap = d; render(d); } if (snap) showAsof(snap, how); }
+  async function auto() {
+    if (inFlight || !keyHex) return; inFlight = true;
+    try { var d = await loadFile(); if (d) take(d); else bar("No price file yet — try Refresh.", "bad"); }
+    catch (e) { if (e && e.name === "OperationError") { keyHex = null; lock("Could not decrypt — re-enter the dashboard password."); } else bar("Network error — retrying in 30s.", "bad"); }
+    finally { inFlight = false; }
+  }
+  async function manual() {
+    if (!keyHex) return; var btn = $("refresh"); btn.disabled = true; bar("Refreshing…");
+    try {
+      if (!snap) { var d0 = await loadFile(); if (d0) take(d0); }
+      if (!snap || !snap.req_topic) { await auto(); return; }
+      var reqid = bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts = Date.now(), since = Math.floor(ts / 1000) - 5;
+      var r = await get(RELAY + "/" + snap.req_topic, { method: "POST", body: JSON.stringify(await enc({ t: "preq", v: 1, reqid: reqid, ts: ts })), headers: { "Content-Type": "text/plain" } });
+      if (!r.ok) throw new Error("relay " + r.status);
+      var t0 = Date.now();
+      while (Date.now() - t0 < 12000) {
+        await new Promise(function (res) { setTimeout(res, 900); });
+        try {
+          var p = await get(RELAY + "/" + snap.rep_topic + "/json?poll=1&since=" + since);
+          if (p.ok) { var lines = (await p.text()).split("\n");
+            for (var i = 0; i < lines.length; i++) { if (!lines[i].trim()) continue; var ev; try { ev = JSON.parse(lines[i]); } catch (e) { continue; }
+              if (ev.event !== "message" || !ev.message) continue;
+              try { var d = await dec(JSON.parse(ev.message)); if (d && d.reqid === reqid) { take(d, "fresh"); restartTimer(); return; } } catch (e2) {} } }
+        } catch (e3) {}
+        if (Date.now() - t0 > 4000) { try { var f = await get(PX_BASE + "r-" + reqid + ".json?t=" + Date.now()); if (f.ok) { take(await dec(await f.json()), "fresh"); restartTimer(); return; } } catch (e4) {} }
+      }
+      await auto(); bar($("bar").textContent + " · box did not answer the refresh", "bad");
+    } catch (e) { await auto(); }
+    finally { btn.disabled = false; }
+  }
+  /* auto refresh every 30 s, timed 8 s after each box publish (:00/:30 ET seconds) so the data is ~8 s old */
+  function restartTimer() {
+    if (timer) clearTimeout(timer);
+    var ms = 30000 - ((Date.now() - 8000) % 30000); if (ms < 3000) ms += 30000;
+    timer = setTimeout(function () { auto(); restartTimer(); }, ms);
+  }
+
+  /* ---- box status (for Buy: RSA key + relay topics) */
+  function ptParts(ms) { var m = {}; new Intl.DateTimeFormat("en-US", { timeZone: PT, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+      .formatToParts(new Date(ms)).forEach(function (p) { m[p.type] = p.value; }); if (m.hour === "24") m.hour = "00"; return m; }
+  function boxName(ms) { var p = ptParts(Math.floor(ms / 30000) * 30000); return p.year + p.month + p.day + "-" + p.hour + p.minute + p.second; }
+  async function loadBox() {
+    if (box && Date.now() - boxAt < 60000) return box;
+    var now = Date.now();
+    for (var i = 0; i < 4; i++) {
+      try { var r = await get(BOX_BASE + boxName(now - 12000 - i * 30000) + ".json"); if (!r.ok) continue;
+        var d = await dec(await r.json()); if (d && now - d.asof_epoch_ms < 180000) { box = d; boxAt = now; return d; } } catch (e) {}
+    }
+    return null;
+  }
+  function mres(t, ok, fin) { var r = $("m-res"); r.textContent = t; r.className = "res" + (ok === true ? " ok" : ok === false ? " bad" : "");
+    if (fin) { $("m-go").style.display = "none"; $("m-cancel").textContent = "Done"; $("m-cancel").disabled = false; } }
+  function openBuy(sym) {
+    var r = snap && (snap.rows || []).filter(function (x) { return x.symbol === sym; })[0];
+    pending = { symbol: sym };
+    $("m-title").textContent = "Buy " + sym + " (long)";
+    $("m-text").textContent = (r ? "Last " + money(r.price) + ". " : "") + (sym === "QQQ"
+      ? "QQQ bot rules: full cash, no margin; −$50 stop; at +$100 the stop locks +$100 then trails $25 behind the peak; flat by 12:55 PT."
+      : "14-stock rules: 1.5% risk sizing (≤16% of equity), stop = closer of OR midpoint or −$10, 2.5R target, $10 lock + $1 trail, flat by 12:55 PT.")
+      + " Refused if any position or order is open. The box replies with the exact order.";
+    $("m-pin").value = ""; $("m-pin").disabled = false; $("m-dry").checked = false; $("m-res").textContent = "";
+    $("m-go").style.display = ""; $("m-go").disabled = false; $("m-cancel").textContent = "Cancel"; $("m-cancel").disabled = false;
+    $("m").style.display = "flex"; setTimeout(function () { try { $("m-pin").focus(); } catch (e) {} }, 50);
+  }
+  function closeBuy() { $("m").style.display = "none"; $("m-pin").value = ""; pending = null; }
+  async function submitBuy(ev) {
+    ev.preventDefault(); if (!pending) return;
+    var pin = $("m-pin").value, dry = $("m-dry").checked; if (!pin) { mres("Enter the action PIN.", false); return; }
+    $("m-go").disabled = true; $("m-pin").disabled = true; $("m-cancel").disabled = true; mres("Checking the box…");
+    var b = await loadBox();
+    if (!b || !b.action_pubkey || !b.actions_enabled) { mres("Buy is not available right now (box status not live). Nothing was sent.", false, true); return; }
+    var reqid = bytesToHex(crypto.getRandomValues(new Uint8Array(16))), ts = Date.now(), since = Math.floor(ts / 1000) - 10;
+    try {
+      var pub = await crypto.subtle.importKey("spki", b64ToBytes(b.action_pubkey), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+      var pinCt = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pub, utf8(JSON.stringify({ pin: pin, reqid: reqid, ts: ts, action: "buy", symbol: pending.symbol })));
+      pin = null; $("m-pin").value = "";
+      var cmd = { t: "cmd", v: 1, reqid: reqid, ts: ts, action: "buy", symbol: pending.symbol, dry_run: dry, pin_ct: bytesToB64(pinCt) };
+      var r = await get(RELAY + "/" + b.cmd_topic, { method: "POST", body: JSON.stringify(await enc(cmd)), headers: { "Content-Type": "text/plain" } });
+      if (!r.ok) throw new Error("relay HTTP " + r.status);
+    } catch (e) { mres("Could not send (" + (e && e.message || "error") + "). Nothing was bought.", false, true); return; }
+    mres("Sent. Waiting for the box…");
+    var t0 = Date.now();
+    while (Date.now() - t0 < 75000) {
+      await new Promise(function (res) { setTimeout(res, 2000); });
+      try { var p = await get(RELAY + "/" + b.reply_topic + "/json?poll=1&since=" + since);
+        if (p.ok) { var lines = (await p.text()).split("\n");
+          for (var i = 0; i < lines.length; i++) { if (!lines[i].trim()) continue; var ev2; try { ev2 = JSON.parse(lines[i]); } catch (x) { continue; }
+            if (ev2.event !== "message" || !ev2.message) continue;
+            try { var rep = await dec(JSON.parse(ev2.message)); if (rep && rep.reqid === reqid) { mres(rep.message || (rep.ok ? "Done." : "Refused."), !!rep.ok, true); return; } } catch (x2) {} } } } catch (e3) {}
+    }
+    mres("No reply yet. Check the dashboard / Alpaca before trying again.", null, true);
+  }
+
+  /* ---- unlock + init */
+  function lock(msg) { $("unlock").style.display = "flex"; bar(msg || "Locked.", "bad"); }
+  async function getSalt() {
+    if (salt) return salt;
+    try { var r = await get(LIVE_LATEST + "?t=" + Date.now()); if (r.ok) salt = String((await r.json()).salt || ""); } catch (e) {}
+    return salt;
+  }
+  async function onUnlock(ev) {
+    ev.preventDefault(); var pw = $("pw").value; if (!pw) return; bar("Unlocking…");
+    var s = await getSalt(); if (!s) { bar("Could not load the key salt — try again.", "bad"); return; }
+    keyHex = await hashPassword(pw, s); $("pw").value = "";
+    try { sessionStorage.setItem("orb_live_k", keyHex); } catch (e) {}
+    $("unlock").style.display = "none"; await auto();
+  }
+  async function init() {
+    $("refresh").addEventListener("click", manual);
+    $("unlock").addEventListener("submit", onUnlock);
+    $("m-form").addEventListener("submit", submitBuy);
+    $("m-cancel").addEventListener("click", closeBuy);
+    $("list").addEventListener("click", function (e) { var b = e.target.closest && e.target.closest(".buy"); if (b) openBuy(b.getAttribute("data-sym")); });
+    render({ rows: [] });
+    getSalt();
+    keyHex = storedKey();
+    if (!keyHex) { lock("Enter the dashboard password to load prices."); }
+    else await auto();
+    restartTimer();
+    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") auto(); });
+  }
+  init();
+})();
+</script></body></html>
